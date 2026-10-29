@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "853924698665",
+    "project_id": "bubble-shooter-db838",
+    "storage_bucket": "bubble-shooter-db838.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853924698665:android:c77b19acba5daa70e71a38",
+        "android_client_info": {
+          "package_name": "app.devmr.bubblegame.bubble_game"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "853924698665-bkp3t3dr4n8f2lo4oc6e2elo65uh41nh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2XmqJho0cHVghh9K3C16VV9vGy3t_wKQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "853924698665-bkp3t3dr4n8f2lo4oc6e2elo65uh41nh.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
