@@ -696,7 +696,10 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
         final dEnd = dStart + segDir * actualDash;
 
         final distFromShooter = accumulatedDist + curDash;
-        final progress = (distFromShooter / targetHelperDistance).clamp(0.0, 1.0);
+        final progress = (distFromShooter / targetHelperDistance).clamp(
+          0.0,
+          1.0,
+        );
         // High opacity at bottom (0.80), fading down to low opacity at top (0.08)
         final alpha = (1.0 - progress * 0.90).clamp(0.08, 0.80);
 
@@ -711,7 +714,10 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       while (curBead < segLength) {
         final pt = seg.$1 + segDir * curBead;
         final distFromShooter = accumulatedDist + curBead;
-        final progress = (distFromShooter / targetHelperDistance).clamp(0.0, 1.0);
+        final progress = (distFromShooter / targetHelperDistance).clamp(
+          0.0,
+          1.0,
+        );
         // High opacity at bottom (0.90), fading down to low opacity at top (0.09)
         final alpha = (1.0 - progress * 0.90).clamp(0.09, 0.90);
         final dotRadius = (3.5 - progress * 1.5).clamp(1.8, 3.5);
