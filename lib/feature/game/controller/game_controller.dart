@@ -132,7 +132,7 @@ class GameController extends GetxController {
 
   void switchBubbles() {
     if (!isGameOver.value && !isPaused.value && !isGameWon.value) {
-      (flameGame as dynamic).switchBubbles();
+      flameGame.switchBubbles();
     }
   }
 

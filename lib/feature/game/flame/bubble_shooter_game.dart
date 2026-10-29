@@ -1,7 +1,9 @@
 import 'dart:math' as math;
+
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
+
 import '../../../core/constants/app_colors.dart';
 import '../../levels/model/level_data.dart';
 import 'models/game_bubble_data.dart';
@@ -51,6 +53,12 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   GameBubbleData? activeBullet;
   bool isBulletMoving = false;
 
+  // Ball switch / rotate animation
+  bool isSwapping = false;
+  double swapTime = 0.0;
+  static const double swapDuration = 0.24;
+  double switchIconRotation = 0.0;
+
   final math.Random _random = math.Random();
 
   @override
@@ -79,10 +87,7 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   }
 
   void _initGrid() {
-    grid = List.generate(
-      maxRows,
-      (_) => List.generate(cols, (_) => null),
-    );
+    grid = List.generate(maxRows, (_) => List.generate(cols, (_) => null));
 
     // Populate initial rows with level colors
     for (int r = 0; r < levelData.rowCount; r++) {
@@ -110,7 +115,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   }
 
   BubbleType _getRandomAvailableColor() {
-    // Pick from remaining colors in grid if possible
     final remainingColors = <BubbleType>{};
     for (final row in grid) {
       for (final b in row) {
@@ -121,7 +125,9 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       final list = remainingColors.toList();
       return list[_random.nextInt(list.length)];
     }
-    return levelData.availableColors[_random.nextInt(levelData.availableColors.length)];
+    return levelData.availableColors[_random.nextInt(
+      levelData.availableColors.length,
+    )];
   }
 
   void _reloadShooter() {
@@ -129,10 +135,83 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     nextBulletType = _getRandomAvailableColor();
   }
 
+  // Switch between current and reserve bubble with rotation animation
+  void switchBubbles() {
+    if (isBulletMoving ||
+        isSwapping ||
+        currentBulletType == null ||
+        nextBulletType == null) {
+      return;
+    }
+    isSwapping = true;
+    swapTime = 0.0;
+  }
+
+  bool _isTapInsideSwitchArea(Vector2 tapPos) {
+    final nextPos = Offset(
+      shooterPosition.x - bubbleRadius * 2.8,
+      shooterPosition.y + 6,
+    );
+    final switchPos = Offset(
+      (shooterPosition.x + nextPos.dx) / 2,
+      shooterPosition.y - bubbleRadius * 1.3,
+    );
+    final distToNext = (Vector2(nextPos.dx, nextPos.dy) - tapPos).length;
+    final distToSwitch = (Vector2(switchPos.dx, switchPos.dy) - tapPos).length;
+    return distToNext <= bubbleRadius * 1.8 ||
+        distToSwitch <= bubbleRadius * 1.5;
+  }
+
+  // -------------------------------------------------------------
+  // Touch & Hold Aiming Controls (Release to Shoot)
+  // -------------------------------------------------------------
+
+  @override
+  void onTapDown(TapDownEvent event) {
+    super.onTapDown(event);
+    if (isBulletMoving || isSwapping) return;
+
+    if (_isTapInsideSwitchArea(event.canvasPosition)) {
+      switchBubbles();
+      return;
+    }
+
+    if (event.canvasPosition.y > shooterPosition.y + 15) return;
+
+    // Start aiming on hold - DO NOT shoot yet!
+    isAiming = true;
+    _updateAimAngle(event.canvasPosition);
+  }
+
+  @override
+  void onTapUp(TapUpEvent event) {
+    super.onTapUp(event);
+    // Release from hold to shoot!
+    if (isAiming && !isBulletMoving && !isSwapping) {
+      isAiming = false;
+      _updateAimAngle(event.canvasPosition);
+      _shootBubble();
+    }
+  }
+
+  @override
+  void onTapCancel(TapCancelEvent event) {
+    super.onTapCancel(event);
+    isAiming = false;
+  }
+
   @override
   void onDragStart(DragStartEvent event) {
     super.onDragStart(event);
-    if (isBulletMoving) return;
+    if (isBulletMoving || isSwapping) return;
+
+    if (_isTapInsideSwitchArea(event.canvasPosition)) {
+      switchBubbles();
+      return;
+    }
+
+    if (event.canvasPosition.y > shooterPosition.y + 15) return;
+
     isAiming = true;
     _updateAimAngle(event.canvasPosition);
   }
@@ -140,34 +219,40 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   @override
   void onDragUpdate(DragUpdateEvent event) {
     super.onDragUpdate(event);
-    if (!isAiming || isBulletMoving) return;
+    if (isBulletMoving || isSwapping) return;
+
+    // Cancel aim if dragged below cannon
+    if (event.canvasEndPosition.y > shooterPosition.y + 35) {
+      isAiming = false;
+      return;
+    }
+
+    isAiming = true;
     _updateAimAngle(event.canvasEndPosition);
   }
 
   @override
   void onDragEnd(DragEndEvent event) {
     super.onDragEnd(event);
-    if (isAiming && !isBulletMoving) {
+    // Release from hold to shoot!
+    if (isAiming && !isBulletMoving && !isSwapping) {
       isAiming = false;
       _shootBubble();
     }
   }
 
   @override
-  void onTapDown(TapDownEvent event) {
-    super.onTapDown(event);
-    if (isBulletMoving) return;
-    _updateAimAngle(event.canvasPosition);
-    _shootBubble();
+  void onDragCancel(DragCancelEvent event) {
+    super.onDragCancel(event);
+    isAiming = false;
   }
 
   void _updateAimAngle(Vector2 touchPoint) {
     final diff = touchPoint - shooterPosition;
-    // Calculate angle towards touch
     var angle = math.atan2(diff.y, diff.x);
     // Clamp so player cannot shoot downwards
-    const minAngle = -math.pi + 0.15;
-    const maxAngle = -0.15;
+    const minAngle = -math.pi + 0.12;
+    const maxAngle = -0.12;
     angle = angle.clamp(minAngle, maxAngle);
     aimAngle = angle;
   }
@@ -195,6 +280,21 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   void update(double dt) {
     super.update(dt);
 
+    // Swap rotation update
+    if (isSwapping) {
+      swapTime += dt;
+      switchIconRotation += dt * (math.pi / swapDuration);
+      if (swapTime >= swapDuration) {
+        final temp = currentBulletType;
+        currentBulletType = nextBulletType;
+        nextBulletType = temp;
+        isSwapping = false;
+        swapTime = 0.0;
+      }
+    } else {
+      switchIconRotation += dt * 0.9;
+    }
+
     // 1. Update active bullet
     if (activeBullet != null && isBulletMoving) {
       final pos = activeBullet!.position;
@@ -217,7 +317,8 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       activeBullet!.velocity = Offset(newVx, vel.dy);
 
       // Collision check with ceiling or existing bubbles
-      if (newY - bubbleRadius <= gridTopOffset || _checkGridCollision(activeBullet!)) {
+      if (newY - bubbleRadius <= gridTopOffset ||
+          _checkGridCollision(activeBullet!)) {
         _snapBulletToGrid(activeBullet!);
         activeBullet = null;
         isBulletMoving = false;
@@ -239,7 +340,10 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       final b = _fallingBubbles[i];
       final pos = b.position;
       final vel = b.velocity;
-      b.position = Offset(pos.dx + vel.dx * dt, pos.dy + (vel.dy + 800 * dt) * dt);
+      b.position = Offset(
+        pos.dx + vel.dx * dt,
+        pos.dy + (vel.dy + 800 * dt) * dt,
+      );
       b.velocity = Offset(vel.dx, vel.dy + 800 * dt);
 
       if (b.position.dy > playHeight + 50) {
@@ -253,8 +357,11 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       for (int c = 0; c < cols; c++) {
         final b = grid[r][c];
         if (b != null) {
-          final distSq = (bullet.position.dx - b.position.dx) * (bullet.position.dx - b.position.dx) +
-              (bullet.position.dy - b.position.dy) * (bullet.position.dy - b.position.dy);
+          final distSq =
+              (bullet.position.dx - b.position.dx) *
+                  (bullet.position.dx - b.position.dx) +
+              (bullet.position.dy - b.position.dy) *
+                  (bullet.position.dy - b.position.dy);
           if (distSq <= (bubbleDiameter * 0.9) * (bubbleDiameter * 0.9)) {
             return true;
           }
@@ -265,7 +372,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   }
 
   void _snapBulletToGrid(GameBubbleData bullet) {
-    // Find closest valid empty cell
     int bestRow = 0;
     int bestCol = 0;
     double minDistance = double.infinity;
@@ -274,11 +380,13 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       final colsInRow = (r % 2 == 1) ? cols - 1 : cols;
       for (int c = 0; c < colsInRow; c++) {
         if (grid[r][c] == null) {
-          // A cell is attachable if it's top row (r==0) or neighbor to an existing bubble
           if (r == 0 || _hasExistingNeighbor(r, c)) {
             final center = _getGridBubblePosition(r, c);
-            final distSq = (bullet.position.dx - center.dx) * (bullet.position.dx - center.dx) +
-                (bullet.position.dy - center.dy) * (bullet.position.dy - center.dy);
+            final distSq =
+                (bullet.position.dx - center.dx) *
+                    (bullet.position.dx - center.dx) +
+                (bullet.position.dy - center.dy) *
+                    (bullet.position.dy - center.dy);
             if (distSq < minDistance) {
               minDistance = distSq;
               bestRow = r;
@@ -289,7 +397,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       }
     }
 
-    // Place bullet
     final targetPos = _getGridBubblePosition(bestRow, bestCol);
     final newBubble = GameBubbleData(
       row: bestRow,
@@ -299,16 +406,13 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     );
     grid[bestRow][bestCol] = newBubble;
 
-    // Check match-3
     _resolveMatches(bestRow, bestCol, bullet.type);
 
-    // Check danger limit (if bubbles touch bottom)
     if (bestRow >= maxRows - 2) {
       onLevelLost('Bubbles reached the danger line!');
       return;
     }
 
-    // Check if level cleared
     if (_isGridEmpty()) {
       onLevelWon();
     }
@@ -327,16 +431,8 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     final neighbors = <(int, int)>[];
 
     final deltas = isOdd
-        ? [
-            (0, -1), (0, 1), // Left, Right
-            (-1, 0), (-1, 1), // Up-Left, Up-Right
-            (1, 0), (1, 1), // Down-Left, Down-Right
-          ]
-        : [
-            (0, -1), (0, 1), // Left, Right
-            (-1, -1), (-1, 0), // Up-Left, Up-Right
-            (1, -1), (1, 0), // Down-Left, Down-Right
-          ];
+        ? [(0, -1), (0, 1), (-1, 0), (-1, 1), (1, 0), (1, 1)]
+        : [(0, -1), (0, 1), (-1, -1), (-1, 0), (1, -1), (1, 0)];
 
     for (final d in deltas) {
       final nr = r + d.$1;
@@ -350,7 +446,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
   }
 
   void _resolveMatches(int startRow, int startCol, BubbleType matchType) {
-    // BFS search
     final queue = <(int, int)>[(startRow, startCol)];
     final visited = <(int, int)>{(startRow, startCol)};
     final matched = <(int, int)>[(startRow, startCol)];
@@ -370,7 +465,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     }
 
     if (matched.length >= 3) {
-      // Pop matches
       for (final m in matched) {
         final b = grid[m.$1][m.$2];
         if (b != null) {
@@ -381,14 +475,11 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       }
 
       onScoreUpdated(matched.length * 100);
-
-      // Check and drop disconnected / floating bubbles
       _dropFloatingBubbles();
     }
   }
 
   void _dropFloatingBubbles() {
-    // BFS from row 0 to find all connected bubbles
     final connected = <(int, int)>{};
     final queue = <(int, int)>[];
 
@@ -412,7 +503,6 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       }
     }
 
-    // Any bubble not connected to ceiling drops down!
     int droppedCount = 0;
     for (int r = 0; r < maxRows; r++) {
       final colsInRow = (r % 2 == 1) ? cols - 1 : cols;
@@ -481,12 +571,12 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       _drawBubble(canvas, b.position, b.color, bubbleRadius);
     }
 
-    // 5. Draw Aim Line with Trajectory and Wall Bounce
+    // 5. Draw Aim Line & Target Helper across half the screen while holding
     if (isAiming && !isBulletMoving) {
       _drawAimTrajectory(canvas);
     }
 
-    // 6. Draw Shooter Base & Loaded Bullet
+    // 6. Draw Shooter Base, Cannons & Rotate Switch
     _drawShooter(canvas);
 
     // 7. Draw Active Bullet
@@ -500,18 +590,48 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     }
   }
 
-  void _drawAimTrajectory(Canvas canvas) {
-    final trajectoryPaint = Paint()
-      ..color = (currentBulletType?.color ?? Colors.white).withValues(alpha: 0.75)
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
+  // -------------------------------------------------------------
+  // Target Helper & Trajectory Raycasting (Half Screen Helper)
+  // -------------------------------------------------------------
 
+  Offset? _findGridImpact(Offset start, Offset dir, double maxDist) {
+    const step = 6.0;
+    double dist = 0.0;
+    while (dist < maxDist) {
+      dist += step;
+      final p = start + dir * dist;
+      if (p.dy - bubbleRadius <= gridTopOffset) return p;
+
+      for (int r = 0; r < maxRows; r++) {
+        for (int c = 0; c < cols; c++) {
+          final b = grid[r][c];
+          if (b != null) {
+            final dx = p.dx - b.position.dx;
+            final dy = p.dy - b.position.dy;
+            if (dx * dx + dy * dy <=
+                (bubbleDiameter * 0.92) * (bubbleDiameter * 0.92)) {
+              return p;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  void _drawAimTrajectory(Canvas canvas) {
+    if (currentBulletType == null) return;
+    final bulletColor = currentBulletType!.color;
+
+    // Extend helper across at least half of screen height
+    final targetHelperDistance = playHeight * 0.54;
+    var remainingDistance = targetHelperDistance;
     var start = Offset(shooterPosition.x, shooterPosition.y);
     var dir = Offset(math.cos(aimAngle), math.sin(aimAngle));
-    double remainingDistance = 600.0;
 
-    for (int segment = 0; segment < 2; segment++) {
-      // Find intersection with wall or top ceiling
+    final segments = <(Offset, Offset)>[];
+
+    for (int segment = 0; segment < 3; segment++) {
       double tx = double.infinity;
       double ty = double.infinity;
 
@@ -525,42 +645,122 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
         ty = (gridTopOffset + bubbleRadius - start.dy) / dir.dy;
       }
 
-      final t = math.min(tx, ty);
-      final stepDistance = math.min(t, remainingDistance);
+      final wallLimit = math.min(tx, ty);
+      final segmentLimit = math.min(wallLimit, remainingDistance);
+
+      final hit = _findGridImpact(start, dir, segmentLimit);
+      if (hit != null) {
+        segments.add((start, hit));
+        break;
+      }
 
       final end = Offset(
-        start.dx + dir.dx * stepDistance,
-        start.dy + dir.dy * stepDistance,
+        start.dx + dir.dx * segmentLimit,
+        start.dy + dir.dy * segmentLimit,
       );
+      segments.add((start, end));
 
-      // Draw dashed trajectory segment
-      _drawDashedLine(canvas, start, end, trajectoryPaint);
-
-      remainingDistance -= stepDistance;
-      if (remainingDistance <= 0 || t == ty) break;
+      remainingDistance -= segmentLimit;
+      if (remainingDistance <= 0 || wallLimit == ty) {
+        break;
+      }
 
       // Bounce off wall
       start = end;
       dir = Offset(-dir.dx, dir.dy);
     }
-  }
 
-  void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
-    const dashLength = 10.0;
+    // Draw fading laser line & beads from bottom (high opacity) to top (low opacity)
+    double accumulatedDist = 0.0;
+    const dashLength = 11.0;
     const gapLength = 8.0;
-    final totalDistance = (p2 - p1).distance;
-    final direction = (p2 - p1) / totalDistance;
+    const beadSpacing = 20.0;
 
-    double currentDist = 0.0;
-    while (currentDist < totalDistance) {
-      final start = p1 + direction * currentDist;
-      final end = p1 + direction * math.min(currentDist + dashLength, totalDistance);
-      canvas.drawLine(start, end, paint);
-      currentDist += dashLength + gapLength;
+    final dashPaint = Paint()
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final beadGlowPaint = Paint()..style = PaintingStyle.fill;
+    final beadCorePaint = Paint()..style = PaintingStyle.fill;
+
+    for (final seg in segments) {
+      final segLength = (seg.$2 - seg.$1).distance;
+      if (segLength <= 0) continue;
+      final segDir = (seg.$2 - seg.$1) / segLength;
+
+      // 1. Draw dashed laser line fading from bottom to top
+      double curDash = 0.0;
+      while (curDash < segLength) {
+        final dStart = seg.$1 + segDir * curDash;
+        final actualDash = math.min(dashLength, segLength - curDash);
+        final dEnd = dStart + segDir * actualDash;
+
+        final distFromShooter = accumulatedDist + curDash;
+        final progress = (distFromShooter / targetHelperDistance).clamp(0.0, 1.0);
+        // High opacity at bottom (0.80), fading down to low opacity at top (0.08)
+        final alpha = (1.0 - progress * 0.90).clamp(0.08, 0.80);
+
+        dashPaint.color = bulletColor.withValues(alpha: alpha);
+        canvas.drawLine(dStart, dEnd, dashPaint);
+
+        curDash += dashLength + gapLength;
+      }
+
+      // 2. Draw glowing trajectory beads fading from bottom to top
+      double curBead = 0.0;
+      while (curBead < segLength) {
+        final pt = seg.$1 + segDir * curBead;
+        final distFromShooter = accumulatedDist + curBead;
+        final progress = (distFromShooter / targetHelperDistance).clamp(0.0, 1.0);
+        // High opacity at bottom (0.90), fading down to low opacity at top (0.09)
+        final alpha = (1.0 - progress * 0.90).clamp(0.09, 0.90);
+        final dotRadius = (3.5 - progress * 1.5).clamp(1.8, 3.5);
+
+        // Outer glow
+        beadGlowPaint.color = bulletColor.withValues(alpha: alpha * 0.60);
+        canvas.drawCircle(pt, dotRadius + 1.5, beadGlowPaint);
+
+        // Core dot
+        beadCorePaint.color = Colors.white.withValues(alpha: alpha * 0.95);
+        canvas.drawCircle(pt, dotRadius * 0.65, beadCorePaint);
+
+        curBead += beadSpacing;
+      }
+
+      accumulatedDist += segLength;
     }
   }
 
+  // -------------------------------------------------------------
+  // Shooter, Cannon & Rotating Ball Switch Rendering
+  // -------------------------------------------------------------
+
   void _drawShooter(Canvas canvas) {
+    final shooterCenter = Offset(shooterPosition.x, shooterPosition.y);
+    final nextCenter = Offset(
+      shooterPosition.x - bubbleRadius * 2.8,
+      shooterPosition.y + 6,
+    );
+
+    // Reserve bubble base ring
+    final reserveBase = Paint()
+      ..color = AppColors.cardBgElevated.withValues(alpha: 0.85)
+      ..style = PaintingStyle.fill;
+    final reserveBorder = Paint()
+      ..color = AppColors.primaryLight.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    canvas.drawCircle(nextCenter, bubbleRadius * 1.05, reserveBase);
+    canvas.drawCircle(nextCenter, bubbleRadius * 1.05, reserveBorder);
+
+    // Rotating Switch/Swap Badge
+    final switchCenter = Offset(
+      (shooterCenter.dx + nextCenter.dx) / 2,
+      shooterCenter.dy - bubbleRadius * 1.25,
+    );
+    _drawRotateSwitchBadge(canvas, switchCenter);
+
     // Cannon Base Ring
     final basePaint = Paint()
       ..color = AppColors.cardBgElevated
@@ -570,16 +770,8 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
 
-    canvas.drawCircle(
-      Offset(shooterPosition.x, shooterPosition.y),
-      bubbleRadius * 1.55,
-      basePaint,
-    );
-    canvas.drawCircle(
-      Offset(shooterPosition.x, shooterPosition.y),
-      bubbleRadius * 1.55,
-      borderPaint,
-    );
+    canvas.drawCircle(shooterCenter, bubbleRadius * 1.55, basePaint);
+    canvas.drawCircle(shooterCenter, bubbleRadius * 1.55, borderPaint);
 
     // Rotating Cannon Barrel Arrow
     canvas.save();
@@ -598,21 +790,114 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     canvas.drawPath(arrowPath, arrowPaint);
     canvas.restore();
 
-    // Next loaded bubble indicator (smaller preview to the left)
-    if (nextBulletType != null) {
-      final nextPos = Offset(shooterPosition.x - bubbleRadius * 2.8, shooterPosition.y + 6);
-      _drawBubble(canvas, nextPos, nextBulletType!.color, bubbleRadius * 0.7);
-    }
-
-    // Current shooter bubble
-    if (currentBulletType != null && !isBulletMoving) {
-      _drawBubble(
-        canvas,
-        Offset(shooterPosition.x, shooterPosition.y),
-        currentBulletType!.color,
-        bubbleRadius,
+    // Render balls with orbital swap animation
+    if (isSwapping && currentBulletType != null && nextBulletType != null) {
+      final t = (swapTime / swapDuration).clamp(0.0, 1.0);
+      final mid = Offset(
+        (shooterCenter.dx + nextCenter.dx) / 2,
+        (shooterCenter.dy + nextCenter.dy) / 2,
       );
+      final orbitR = (shooterCenter - nextCenter).distance / 2;
+      final angle = math.pi * t;
+
+      final curPos = Offset(
+        mid.dx + orbitR * math.cos(angle),
+        mid.dy - orbitR * math.sin(angle) * 0.8,
+      );
+      final curRadius = bubbleRadius * (1.0 - 0.25 * t);
+
+      final nxtPos = Offset(
+        mid.dx - orbitR * math.cos(angle),
+        mid.dy + orbitR * math.sin(angle) * 0.8,
+      );
+      final nxtRadius = bubbleRadius * (0.75 + 0.25 * t);
+
+      _drawBubble(canvas, nxtPos, nextBulletType!.color, nxtRadius);
+      _drawBubble(canvas, curPos, currentBulletType!.color, curRadius);
+    } else {
+      // Next loaded bubble indicator (smaller preview to the left)
+      if (nextBulletType != null) {
+        _drawBubble(
+          canvas,
+          nextCenter,
+          nextBulletType!.color,
+          bubbleRadius * 0.75,
+        );
+      }
+
+      // Current shooter bubble
+      if (currentBulletType != null && !isBulletMoving) {
+        _drawBubble(
+          canvas,
+          shooterCenter,
+          currentBulletType!.color,
+          bubbleRadius,
+        );
+      }
     }
+  }
+
+  void _drawRotateSwitchBadge(Canvas canvas, Offset center) {
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(switchIconRotation);
+
+    // Glowing badge circle
+    final badgePaint = Paint()
+      ..color = AppColors.cardBgElevated
+      ..style = PaintingStyle.fill;
+    final badgeBorder = Paint()
+      ..color = AppColors.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    canvas.drawCircle(Offset.zero, 13, badgePaint);
+    canvas.drawCircle(Offset.zero, 13, badgeBorder);
+
+    // Two curved arrows
+    final arrowPaint = Paint()
+      ..color = AppColors.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    final fillArrow = Paint()
+      ..color = AppColors.accent
+      ..style = PaintingStyle.fill;
+
+    // Top arc
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset.zero, radius: 7.5),
+      -math.pi * 0.85,
+      math.pi * 0.7,
+      false,
+      arrowPaint,
+    );
+    // Arrowhead 1
+    final path1 = Path()
+      ..moveTo(5.5, -4.5)
+      ..lineTo(8.5, -7.5)
+      ..lineTo(5.5, -10.5)
+      ..close();
+    canvas.drawPath(path1, fillArrow);
+
+    // Bottom arc
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset.zero, radius: 7.5),
+      math.pi * 0.15,
+      math.pi * 0.7,
+      false,
+      arrowPaint,
+    );
+    // Arrowhead 2
+    final path2 = Path()
+      ..moveTo(-5.5, 4.5)
+      ..lineTo(-8.5, 7.5)
+      ..lineTo(-5.5, 10.5)
+      ..close();
+    canvas.drawPath(path2, fillArrow);
+
+    canvas.restore();
   }
 
   void _drawBubble(Canvas canvas, Offset pos, Color color, double radius) {
@@ -642,4 +927,3 @@ class BubbleShooterGame extends FlameGame with TapCallbacks, DragCallbacks {
     );
   }
 }
-
